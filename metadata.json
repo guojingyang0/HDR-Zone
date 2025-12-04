@@ -1,0 +1,5 @@
+{
+  "name": "HDR Zone Visualizer",
+  "description": "An interactive educational tool to understand the mathematical model and interaction rules of HDR zone-based grading tools like those found in DaVinci Resolve.",
+  "requestFramePermissions": []
+}
