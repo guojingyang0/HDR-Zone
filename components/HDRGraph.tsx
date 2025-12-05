@@ -33,6 +33,13 @@ const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 
 
     // Define Gradients & Filters
     const defs = svg.append("defs");
+
+    // Clip Path to prevent drawing outside axes
+    defs.append("clipPath")
+      .attr("id", "chart-clip")
+      .append("rect")
+      .attr("width", innerWidth)
+      .attr("height", innerHeight);
     
     // Glow Filter
     const filter = defs.append("filter")
@@ -129,6 +136,7 @@ const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 
         .attr("fill", color.toString())
         .attr("opacity", opacity)
         .attr("d", area)
+        .attr("clip-path", "url(#chart-clip)") // Clip to axes
         .style("mix-blend-mode", theme === 'dark' ? "screen" : "multiply");
     });
 
@@ -140,6 +148,7 @@ const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 
       .attr("y2", yScale(MAX_STOP))
       .attr("stroke", refLineColor)
       .attr("stroke-width", 1.5)
+      .attr("clip-path", "url(#chart-clip)") // Clip reference line too
       .style("stroke-dasharray", "4 4");
 
     // 3. Draw The Result Curve
@@ -156,6 +165,7 @@ const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 
       .attr("stroke-width", 3)
       .attr("d", line)
       .attr("filter", "url(#glow)")
+      .attr("clip-path", "url(#chart-clip)") // Clip shadow
       .attr("opacity", 0.6);
 
     // Main path
@@ -164,6 +174,7 @@ const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 
       .attr("fill", "none")
       .attr("stroke", "url(#curveGradient)")
       .attr("stroke-width", 2.5)
+      .attr("clip-path", "url(#chart-clip)") // Clip main line
       .attr("d", line);
       
     // 4. Draw Falloff Markers (Vertical Lines)
@@ -183,9 +194,13 @@ const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 
         .attr("stroke", zone.color)
         .attr("stroke-width", 1)
         .attr("stroke-dasharray", "2 2")
+        .attr("clip-path", "url(#chart-clip)") // Clip stem
         .attr("opacity", isActive ? 0.8 : 0.3);
 
-      // Range Indicator Top
+      // Range Indicator Top (Draw outside clip area usually fine, or keep inside)
+      // The stem is clipped, but the top indicator might want to stay visible near the top edge.
+      // Since it's at y = innerHeight * 0.05, it's inside.
+      
       const isLowPass = [ZoneType.BLACK, ZoneType.DARK, ZoneType.SHADOW].includes(zone.id);
       const falloffEnd = isLowPass ? zone.rangeEnd - zone.falloff : zone.rangeEnd + zone.falloff;
       const xFalloff = xScale(falloffEnd);
@@ -198,13 +213,15 @@ const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 
             .attr("x2", xFalloff)
             .attr("y2", innerHeight * 0.05)
             .attr("stroke", zone.color)
-            .attr("stroke-width", 2);
+            .attr("stroke-width", 2)
+            .attr("clip-path", "url(#chart-clip)");
             
         g.append("circle")
             .attr("cx", xFalloff)
             .attr("cy", innerHeight * 0.05)
             .attr("r", 4)
-            .attr("fill", zone.color);
+            .attr("fill", zone.color)
+            .attr("clip-path", "url(#chart-clip)");
       }
     });
 

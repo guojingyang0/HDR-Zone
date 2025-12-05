@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { ZoneConfig, ZoneType } from './types';
+import { GoogleGenAI } from "@google/genai";
+import { ZoneConfig, ZoneType, GradingHistory } from './types';
 import { generateCurveData } from './utils/hdrMath';
 import { translations, Language } from './utils/i18n';
 import HDRGraph from './components/HDRGraph';
@@ -11,9 +12,45 @@ import GradientPreview from './components/GradientPreview';
 import MathPanel from './components/MathPanel';
 import ZoneGuide from './components/ZoneGuide'; 
 import ImageGrader from './components/ImageGrader';
-import { Info, Moon, Sun, Monitor, Layers, BookOpen, RotateCcw, Image as ImageIcon, ChevronDown, ChevronUp, Sparkles, Send } from 'lucide-react';
+import { Info, Moon, Sun, Monitor, Layers, BookOpen, RotateCcw, Image as ImageIcon, ChevronDown, ChevronUp, Sparkles, Send, History, Check, X } from 'lucide-react';
 
 const DEFAULT_IMAGE_URL = "https://images.unsplash.com/photo-1493246507139-91e8fad9978e?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80";
+
+// Professional Colorist System Prompt
+const SYSTEM_PROMPT = `
+You are a professional HDR colorist, combining image algorithm and color science knowledge.
+Your task is to provide "Automatic Color Grading Parameter Suggestions" for an HDR Zone-based tool (DaVinci Resolve style).
+
+Input:
+1. An image (user provided).
+2. User's target style (e.g., Cinematic, Cyberpunk, Natural).
+
+Output:
+A JSON object with specific adjustments.
+
+Requirements:
+- Maintain natural skin tones (do not skew Midtones/Light zones too much).
+- Preserve details in Highlights and Shadows.
+- Avoid banding or clipping.
+- Map your "midtones" logic to the 0.0 EV range.
+
+JSON Format:
+{
+  "baseParams": {
+    "exposure": 0.00,  // Global offset (-1.0 to 1.0)
+    "contrast": 0.00,  // S-Curve intensity (-1.0 to 1.0)
+    "blacks": 0.00,    // Black point offset
+    "saturation": 0.00 // Global saturation offset (-1.0 to 1.0)
+  },
+  "hdrZones": {
+    "shadows":   {"lum": 0.0, "sat": 0.0}, // Affects Dark/Shadow zones
+    "midtones":  {"lum": 0.0, "sat": 0.0}, // Affects Light zone
+    "highlights":{"lum": 0.0, "sat": 0.0}, // Affects Highlight zone
+    "specular":  {"lum": 0.0, "sat": 0.0}  // Affects Specular zone
+  },
+  "reason": "Short explanation of the grading strategy."
+}
+`;
 
 const INITIAL_ZONES: ZoneConfig[] = [
   // Low Range Group (Low Pass)
@@ -111,8 +148,14 @@ function App() {
   
   const [zones, setZones] = useState<ZoneConfig[]>(INITIAL_ZONES);
   const [activeZoneId, setActiveZoneId] = useState<ZoneType | null>(null);
+  
+  // AI & History State
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [history, setHistory] = useState<GradingHistory[]>([
+      { id: 'init', name: 'Default', timestamp: Date.now(), zones: JSON.parse(JSON.stringify(INITIAL_ZONES)) }
+  ]);
+  const [currentHistoryId, setCurrentHistoryId] = useState<string>('init');
   
   // Image State
   const [imageSrc, setImageSrc] = useState<string>(DEFAULT_IMAGE_URL);
@@ -168,137 +211,170 @@ function App() {
     }
   };
 
-  const analyzeAndApply = async (text: string) => {
-      setIsAiLoading(true);
-      await new Promise(r => setTimeout(r, 800)); // Simulate think time
+  // Helper to convert URL/Path to Base64 for Gemini
+  const getBase64FromUrl = async (url: string): Promise<string> => {
+    // If it's already data URL, return as is
+    if (url.startsWith('data:')) return url;
+    
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (e) {
+        console.warn("Fetch failed, possibly CORS. AI will run text-only mode.");
+        return "";
+    }
+  };
 
-      // Deep copy initial state to ensure clean slate
-      let newZones = JSON.parse(JSON.stringify(INITIAL_ZONES));
-      const lower = text.toLowerCase().trim();
+  const saveToHistory = (name: string, newZones: ZoneConfig[]) => {
+    const newEntry: GradingHistory = {
+        id: `h_${Date.now()}`,
+        name: name.length > 15 ? name.substring(0, 15) + '...' : name,
+        timestamp: Date.now(),
+        zones: JSON.parse(JSON.stringify(newZones))
+    };
+    setHistory(prev => [newEntry, ...prev].slice(0, 10)); // Keep last 10
+    setCurrentHistoryId(newEntry.id);
+  };
+
+  const loadHistory = (entry: GradingHistory) => {
+      setZones(JSON.parse(JSON.stringify(entry.zones)));
+      setCurrentHistoryId(entry.id);
+  };
+  
+  const deleteHistory = (e: React.MouseEvent, id: string) => {
+      e.stopPropagation();
+      setHistory(prev => prev.filter(h => h.id !== id));
+      if (currentHistoryId === id && history.length > 1) {
+          const next = history.find(h => h.id !== id);
+          if (next) loadHistory(next);
+      }
+  };
+
+  const applyAiResult = (data: any, promptText: string) => {
+      const { baseParams, hdrZones } = data;
       
-      // --- Explicit Reset Logic ---
-      if (!lower || ['reset', 'default', 'flat', '重置', '默认', '平直'].some(k => lower.includes(k))) {
-          setZones(newZones);
-          setIsAiLoading(false);
-          return;
-      }
-
-      let applied = false;
-
-      // --- Contrast & Mood ---
-      if (lower.includes('contrast') || lower.includes('drama') || lower.includes('对比')) {
-          newZones = newZones.map((z: ZoneConfig) => {
-              if (z.id === ZoneType.BLACK) return { ...z, exposure: -0.2 };
-              if (z.id === ZoneType.SHADOW) return { ...z, exposure: -0.6 }; 
-              if (z.id === ZoneType.LIGHT) return { ...z, exposure: 0.5 };
-              if (z.id === ZoneType.HIGHLIGHT) return { ...z, exposure: 0.3 };
-              return z;
-          });
-          applied = true;
-      }
-
-      // --- Cyberpunk / Neon ---
-      // Needs crushed blacks, but punchy highlights and high saturation
-      if (lower.includes('cyber') || lower.includes('neon') || lower.includes('朋克')) {
-           newZones = newZones.map((z: ZoneConfig) => {
-              if (z.id === ZoneType.BLACK) return { ...z, exposure: -1.0, saturation: 1.2 }; 
-              if (z.id === ZoneType.DARK) return { ...z, exposure: -0.5, saturation: 1.5 };
-              if (z.id === ZoneType.SHADOW) return { ...z, exposure: -0.3, saturation: 1.4 };
-              if (z.id === ZoneType.HIGHLIGHT) return { ...z, exposure: 0.8, saturation: 1.3 }; 
-              if (z.id === ZoneType.SPECULAR) return { ...z, exposure: 3.0, saturation: 0.5 }; 
-              return z;
-          });
-          applied = true;
-      } 
+      let newZones = [...INITIAL_ZONES]; 
       
-      // --- Vintage / Film ---
-      // Faded blacks (Lift), soft highlights, slight desaturation
-      else if (lower.includes('film') || lower.includes('vintage') || lower.includes('retro') || lower.includes('胶片')) {
-           newZones = newZones.map((z: ZoneConfig) => {
-              // Lift the Black point (Fade)
-              if (z.id === ZoneType.BLACK) return { ...z, exposure: 0.8, rangeEnd: -5.0 }; 
-              // Add some contrast in mids
-              if (z.id === ZoneType.SHADOW) return { ...z, exposure: -0.2 };
-              if (z.id === ZoneType.LIGHT) return { ...z, exposure: 0.2 };
-              // Soften Highlights
-              if (z.id === ZoneType.HIGHLIGHT) return { ...z, exposure: -0.5, falloff: 0.8 }; 
-              // Roll off Speculars completely
-              if (z.id === ZoneType.SPECULAR) return { ...z, exposure: -1.5 }; 
-              // Global slight desaturation
-              return { ...z, saturation: 0.85 };
-          });
-          applied = true;
+      const update = (id: ZoneType, updates: Partial<ZoneConfig>) => {
+          newZones = newZones.map(z => z.id === id ? { ...z, ...updates } : z);
+      };
+
+      // 1. Global Base Params
+      const globalExp = baseParams?.exposure || 0;
+      const globalSat = (baseParams?.saturation || 0);
+      const contrast = baseParams?.contrast || 0;
+      const blacks = baseParams?.blacks || 0;
+
+      // 2. Map AI Logic
+      update(ZoneType.BLACK, { exposure: blacks + globalExp });
+
+      if (hdrZones?.shadows) {
+          const { lum, sat } = hdrZones.shadows;
+          const contrastOffset = contrast * -0.3;
+          update(ZoneType.DARK, { exposure: lum + globalExp + contrastOffset, saturation: 1 + sat + globalSat });
+          update(ZoneType.SHADOW, { exposure: (lum * 0.5) + globalExp + (contrastOffset * 0.5), saturation: 1 + sat + globalSat });
       }
 
-      // --- Night Scene ---
-      // Darker overall, but preserve light sources
-      else if (lower.includes('night') || lower.includes('dark') || lower.includes('evening') || lower.includes('夜')) {
-           newZones = newZones.map((z: ZoneConfig) => {
-              if (z.id === ZoneType.BLACK) return { ...z, exposure: -0.5 }; 
-              if (z.id === ZoneType.DARK) return { ...z, exposure: -1.0, saturation: 0.8 }; 
-              if (z.id === ZoneType.SHADOW) return { ...z, exposure: -0.5 };
-              // Dim highlights but don't kill them
-              if (z.id === ZoneType.HIGHLIGHT) return { ...z, exposure: -1.0, saturation: 0.5 }; 
-              // Keep speculars (street lights) popping
-              if (z.id === ZoneType.SPECULAR) return { ...z, exposure: 1.5, saturation: 1.0 }; 
-              return z;
-          });
-          applied = true;
+      if (hdrZones?.midtones) {
+          const { lum, sat } = hdrZones.midtones;
+          const contrastOffset = contrast * 0.1;
+          update(ZoneType.LIGHT, { exposure: lum + globalExp + contrastOffset, saturation: 1 + sat + globalSat });
       }
 
-      // --- High Key ---
-      // Bright, airy, lifted shadows
-      else if (lower.includes('high key') || lower.includes('high-key') || lower.includes('高调') || lower.includes('bright')) {
-             newZones = newZones.map((z: ZoneConfig) => {
-                if (z.id === ZoneType.BLACK) return { ...z, exposure: 0.8 }; 
-                if (z.id === ZoneType.DARK) return { ...z, exposure: 0.6 };
-                if (z.id === ZoneType.SHADOW) return { ...z, exposure: 0.4 }; 
-                if (z.id === ZoneType.LIGHT) return { ...z, exposure: 0.6 }; 
-                if (z.id === ZoneType.HIGHLIGHT) return { ...z, exposure: 0.2 }; // Don't blow out too much
-                return z;
-            });
-            applied = true;
+      if (hdrZones?.highlights) {
+          const { lum, sat } = hdrZones.highlights;
+           const contrastOffset = contrast * 0.2;
+          update(ZoneType.HIGHLIGHT, { exposure: lum + globalExp + contrastOffset, saturation: 1 + sat + globalSat });
       }
 
-      // --- Noir / B&W ---
-      else if (lower.includes('noir') || lower.includes('b&w') || lower.includes('black and white') || lower.includes('黑白')) {
-            newZones = newZones.map((z: ZoneConfig) => {
-                return { 
-                    ...z, 
-                    saturation: 0, 
-                    exposure: z.id === ZoneType.SHADOW ? -0.8 : (z.id === ZoneType.LIGHT ? 0.6 : z.exposure) 
-                };
-            });
-            // Extra crunch
-            newZones = newZones.map((z: ZoneConfig) => {
-                 if (z.id === ZoneType.BLACK) return { ...z, exposure: -1.0 };
-                 if (z.id === ZoneType.SPECULAR) return { ...z, exposure: 1.5 };
-                 return z;
-            });
-            applied = true;
-      }
-
-      // --- Vibrant / Pop ---
-      else if (lower.includes('pop') || lower.includes('vibrant') || lower.includes('鲜艳')) {
-            newZones = newZones.map((z: ZoneConfig) => {
-                if (z.id === ZoneType.SHADOW) return { ...z, saturation: 1.4, exposure: -0.1 };
-                if (z.id === ZoneType.LIGHT) return { ...z, saturation: 1.3, exposure: 0.1 };
-                return z;
-            });
-            applied = true;
-      }
-
-      // Fallback: S-Curve if typed something else but not recognized
-      if (!applied && text.length > 0) {
-           newZones = newZones.map((z: ZoneConfig) => {
-              if (z.id === ZoneType.SHADOW) return { ...z, exposure: -0.4 };
-              if (z.id === ZoneType.LIGHT) return { ...z, exposure: 0.4 };
-              return z;
-          });
+      if (hdrZones?.specular) {
+          const { lum, sat } = hdrZones.specular;
+          update(ZoneType.SPECULAR, { exposure: lum + globalExp, saturation: 1 + sat + globalSat });
       }
 
       setZones(newZones);
-      setIsAiLoading(false);
+      saveToHistory(promptText, newZones);
+      setViewMode('image');
+  };
+
+  const analyzeAndApply = async (text: string) => {
+      setIsAiLoading(true);
+      
+      try {
+          const lower = text.toLowerCase().trim();
+          // Explicit Reset
+          if (!lower || ['reset', 'default', 'flat', '重置', '默认'].some(k => lower.includes(k))) {
+              setZones(INITIAL_ZONES);
+              saveToHistory(t.presets.chips.reset, INITIAL_ZONES);
+              setIsAiLoading(false);
+              return;
+          }
+
+          // 1. Prepare Image
+          let imagePart = null;
+          const base64 = await getBase64FromUrl(imageSrc);
+          if (base64) {
+              const data = base64.split(',')[1]; 
+              const mimeType = base64.split(';')[0].split(':')[1] || 'image/jpeg';
+              imagePart = { inlineData: { mimeType, data } };
+          }
+
+          // 2. Call Gemini
+          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          
+          const contentsParts: any[] = [];
+          if (imagePart) contentsParts.push(imagePart);
+          contentsParts.push({ text: `Target Style: ${text}` });
+
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            config: {
+                systemInstruction: SYSTEM_PROMPT,
+                responseMimeType: "application/json"
+            },
+            contents: [{ parts: contentsParts }]
+          });
+
+          const resultText = response.text;
+          if (resultText) {
+              const analysis = JSON.parse(resultText);
+              applyAiResult(analysis, text);
+          }
+
+      } catch (e) {
+          console.error("AI Generation failed:", e);
+          fallbackHeuristic(text);
+      } finally {
+          setIsAiLoading(false);
+      }
+  };
+
+  const fallbackHeuristic = (text: string) => {
+      let newZones = JSON.parse(JSON.stringify(INITIAL_ZONES));
+      const lower = text.toLowerCase();
+      
+      if (lower.includes('cyber') || lower.includes('neon')) {
+           newZones = newZones.map((z: ZoneConfig) => {
+              if (z.id === ZoneType.BLACK) return { ...z, exposure: -1.0, saturation: 1.2 }; 
+              if (z.id === ZoneType.HIGHLIGHT) return { ...z, exposure: 0.8, saturation: 1.3 }; 
+              return z;
+          });
+      } else if (lower.includes('film') || lower.includes('vintage')) {
+           newZones = newZones.map((z: ZoneConfig) => {
+              if (z.id === ZoneType.BLACK) return { ...z, exposure: 0.8, rangeEnd: -5.0 }; 
+              if (z.id === ZoneType.HIGHLIGHT) return { ...z, exposure: -0.5 }; 
+              return { ...z, saturation: 0.85 };
+          });
+      }
+      setZones(newZones);
+      saveToHistory(text, newZones);
+      setViewMode('image');
   };
 
   const handleAiSubmit = (e: React.FormEvent) => {
@@ -395,8 +471,8 @@ function App() {
         )}
       </section>
 
-      {/* AI Analysis Bar */}
-      <div className="max-w-7xl mx-auto mb-8">
+      {/* AI Analysis Bar & History */}
+      <div className="max-w-7xl mx-auto mb-8 space-y-4">
         <div className="glass-panel p-3 rounded-xl flex flex-col md:flex-row gap-4 items-center shadow-lg">
              {/* Label */}
              <div className="flex items-center gap-2 text-purple-500 font-bold whitespace-nowrap min-w-fit">
@@ -404,7 +480,7 @@ function App() {
                  <span className="text-sm">{t.presets.title}</span>
              </div>
              
-             {/* Input Area - Adjusted for alignment */}
+             {/* Input Area */}
              <div className="flex-1 w-full relative group">
                  <form onSubmit={handleAiSubmit} className="relative w-full flex items-center">
                     <input 
@@ -430,9 +506,41 @@ function App() {
                  <button onClick={() => triggerAiPreset(t.presets.chips.cyberpunk)} className="chip-btn border-purple-500/30 text-purple-500 hover:bg-purple-500/10">{t.presets.chips.cyberpunk}</button>
                  <button onClick={() => triggerAiPreset(t.presets.chips.film)} className="chip-btn border-orange-500/30 text-orange-500 hover:bg-orange-500/10">{t.presets.chips.film}</button>
                  <button onClick={() => triggerAiPreset(t.presets.chips.highkey)} className="chip-btn border-blue-500/30 text-blue-500 hover:bg-blue-500/10">{t.presets.chips.highkey}</button>
-                 <button onClick={() => triggerAiPreset(t.presets.chips.bnw)} className="chip-btn border-gray-500/30 text-gray-500 hover:bg-gray-500/10">{t.presets.chips.bnw}</button>
              </div>
         </div>
+        
+        {/* History / Versions List */}
+        {history.length > 0 && (
+            <div className="flex items-center gap-3 overflow-x-auto px-1 no-scrollbar">
+                <div className="flex items-center gap-1 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider shrink-0">
+                    <History size={12} />
+                    {t.history}
+                </div>
+                <div className="h-4 w-px bg-gray-300 dark:bg-gray-700 shrink-0"></div>
+                {history.map((h) => (
+                    <div 
+                        key={h.id}
+                        onClick={() => loadHistory(h)}
+                        className={`group flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs cursor-pointer transition-all shrink-0
+                        ${currentHistoryId === h.id 
+                            ? 'bg-blue-500/10 border-blue-500 text-blue-600 dark:text-blue-400' 
+                            : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600'
+                        }`}
+                    >
+                        <span className="font-medium max-w-[100px] truncate">{h.name}</span>
+                        {currentHistoryId === h.id && <Check size={10} className="text-blue-500" />}
+                        {h.id !== 'init' && (
+                             <button 
+                                onClick={(e) => deleteHistory(e, h.id)}
+                                className="opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white rounded-full p-0.5 transition-all"
+                             >
+                                 <X size={10} />
+                             </button>
+                        )}
+                    </div>
+                ))}
+            </div>
+        )}
       </div>
 
       <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -441,37 +549,34 @@ function App() {
         <div className="lg:col-span-7 space-y-6">
           
           {/* Main Visualization Card */}
-          <div className="glass-panel rounded-2xl shadow-2xl p-1 relative overflow-hidden transition-all duration-500">
+          <div className="glass-panel rounded-2xl shadow-2xl p-1 relative overflow-hidden transition-all duration-500 flex flex-col">
              
-             {/* Toolbar for View Mode */}
-             <div className="absolute top-4 left-4 z-10 flex gap-2">
-                <div className="flex bg-gray-100 dark:bg-black/40 p-1 rounded-lg backdrop-blur-sm border border-gray-200 dark:border-white/10">
-                   <button
-                     onClick={() => setViewMode('2d')}
-                     className={`p-1.5 rounded-md transition-all ${viewMode === '2d' ? 'bg-white dark:bg-gray-700 shadow text-blue-600 dark:text-blue-400' : 'text-gray-400'}`}
-                     title={t.view2D}
-                   >
-                     <Monitor size={14} /> 
-                   </button>
-                   <button
-                     onClick={() => setViewMode('3d')}
-                     className={`p-1.5 rounded-md transition-all ${viewMode === '3d' ? 'bg-white dark:bg-gray-700 shadow text-purple-600 dark:text-purple-400' : 'text-gray-400'}`}
-                     title={t.view3D}
-                   >
-                     <Layers size={14} />
-                   </button>
-                   <button
-                     onClick={() => setViewMode('image')}
-                     className={`p-1.5 rounded-md transition-all ${viewMode === 'image' ? 'bg-white dark:bg-gray-700 shadow text-green-600 dark:text-green-400' : 'text-gray-400'}`}
-                     title={t.viewImage}
-                   >
-                     <ImageIcon size={14} />
-                   </button>
+             {/* Card Header: Toolbar for View Mode (MOVED HERE TO FIX OVERLAP) */}
+             <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center bg-gray-50/50 dark:bg-black/20">
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => setViewMode('2d')}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === '2d' ? 'bg-white dark:bg-gray-700 shadow text-blue-600 dark:text-blue-400' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5'}`}
+                    >
+                        <Monitor size={14} /> {t.view2D}
+                    </button>
+                    <button
+                        onClick={() => setViewMode('3d')}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === '3d' ? 'bg-white dark:bg-gray-700 shadow text-purple-600 dark:text-purple-400' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5'}`}
+                    >
+                        <Layers size={14} /> {t.view3D}
+                    </button>
+                    <button
+                        onClick={() => setViewMode('image')}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === 'image' ? 'bg-white dark:bg-gray-700 shadow text-green-600 dark:text-green-400' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5'}`}
+                    >
+                        <ImageIcon size={14} /> {t.viewImage}
+                    </button>
                 </div>
              </div>
 
              {/* Graph/Image Area */}
-             <div className="bg-white/50 dark:bg-black/20 rounded-xl p-4 min-h-[420px] flex flex-col justify-center relative">
+             <div className="bg-white/50 dark:bg-black/20 rounded-b-xl p-4 min-h-[420px] flex flex-col justify-center relative">
                 {viewMode === '2d' && (
                   <HDRGraph 
                     data={curveData} 
@@ -503,7 +608,7 @@ function App() {
              </div>
              
              {/* Footer Info */}
-             <div className="px-4 py-3 bg-gray-50/50 dark:bg-black/20 border-t border-gray-200 dark:border-gray-800 flex justify-between items-center text-xs text-gray-500">
+             <div className="px-4 py-2 bg-gray-50/50 dark:bg-black/20 border-t border-gray-200 dark:border-gray-800 flex justify-between items-center text-[10px] text-gray-400 uppercase tracking-wider">
                 <span>{viewMode === 'image' ? t.viewImage : t.xAxis}</span>
                 {viewMode === '2d' && <span>{t.activeCurve}</span>}
              </div>

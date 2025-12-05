@@ -43,3 +43,10 @@ export interface CurvePoint {
   y: number; // Output Luminance (stops)
   weights: Record<ZoneType, number>; // How much each zone influences this pixel
 }
+
+export interface GradingHistory {
+  id: string;
+  name: string;
+  timestamp: number;
+  zones: ZoneConfig[];
+}

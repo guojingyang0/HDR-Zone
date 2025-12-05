@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { ZoneConfig } from '../types';
 import { processImageBuffer } from '../utils/hdrMath';
-import { Upload, Download, Image as ImageIcon, Loader2 } from 'lucide-react';
+import { Upload, Download, Image as ImageIcon, Loader2, SplitSquareHorizontal } from 'lucide-react';
 
 interface ImageGraderProps {
   zones: ZoneConfig[];
@@ -15,6 +15,7 @@ const ImageGrader: React.FC<ImageGraderProps> = ({ zones, imageSrc, onImageImpor
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
   
   const originalImageDataRef = useRef<ImageData | null>(null);
 
@@ -38,18 +39,28 @@ const ImageGrader: React.FC<ImageGraderProps> = ({ zones, imageSrc, onImageImpor
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       originalImageDataRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
       
-      process(ctx);
+      if (showOriginal) {
+          ctx.putImageData(originalImageDataRef.current, 0, 0);
+      } else {
+          process(ctx);
+      }
     };
   }, [imageSrc]);
 
+  // Effect to handle reprocessing OR toggling original view
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !originalImageDataRef.current) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     
-    let animationFrameId: number;
-    
+    if (showOriginal) {
+        // Just draw original
+        ctx.putImageData(originalImageDataRef.current, 0, 0);
+        return;
+    }
+
+    // Debounced processing for slider drag
     const runProcess = () => {
         setIsProcessing(true);
         setTimeout(() => {
@@ -60,7 +71,7 @@ const ImageGrader: React.FC<ImageGraderProps> = ({ zones, imageSrc, onImageImpor
 
     const timer = setTimeout(runProcess, 50);
     return () => clearTimeout(timer);
-  }, [zones]);
+  }, [zones, showOriginal]);
 
   const process = (ctx: CanvasRenderingContext2D) => {
     if (!originalImageDataRef.current) return;
@@ -86,20 +97,40 @@ const ImageGrader: React.FC<ImageGraderProps> = ({ zones, imageSrc, onImageImpor
   return (
     <div className="flex flex-col h-full relative" ref={containerRef}>
       
-      {/* Toolbar: Flex Wrap for responsiveness */}
+      {/* Toolbar: Positioned absolutely but top-aligned within the container. 
+          Since View Mode buttons are now moved out in App.tsx, we can safely use the top area. 
+      */}
       <div className="absolute top-4 left-4 right-4 z-10 flex flex-wrap justify-between gap-2 pointer-events-none">
-         <div className="pointer-events-auto">
-             <label className="cursor-pointer bg-white/90 dark:bg-black/80 backdrop-blur-md text-gray-800 dark:text-gray-200 px-4 py-2 rounded-lg shadow-lg hover:bg-white dark:hover:bg-black transition-all flex items-center gap-2 text-xs font-bold border border-gray-200 dark:border-gray-700 whitespace-nowrap">
+         <div className="pointer-events-auto flex items-center gap-2">
+             <label className="cursor-pointer bg-white/90 dark:bg-black/80 backdrop-blur-md text-gray-800 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-lg hover:bg-white dark:hover:bg-black transition-all flex items-center gap-2 text-xs font-bold border border-gray-200 dark:border-gray-700 whitespace-nowrap">
                 <Upload size={14} />
                 {t.importImage}
                 <input type="file" accept="image/*" onChange={onImageImport} className="hidden" />
              </label>
+             
+             {imageSrc && (
+                 <button 
+                    onMouseDown={() => setShowOriginal(true)}
+                    onMouseUp={() => setShowOriginal(false)}
+                    onMouseLeave={() => setShowOriginal(false)}
+                    onTouchStart={() => setShowOriginal(true)}
+                    onTouchEnd={() => setShowOriginal(false)}
+                    className={`px-3 py-1.5 rounded-lg shadow-lg backdrop-blur-md transition-all flex items-center gap-2 text-xs font-bold border whitespace-nowrap select-none
+                    ${showOriginal 
+                        ? 'bg-blue-600 text-white border-blue-500 scale-95 ring-2 ring-blue-400' 
+                        : 'bg-white/90 dark:bg-black/80 text-gray-800 dark:text-gray-200 border-gray-200 dark:border-gray-700'
+                    }`}
+                 >
+                    <SplitSquareHorizontal size={14} />
+                    {showOriginal ? t.original : t.compare}
+                 </button>
+             )}
          </div>
 
          <div className="pointer-events-auto">
              <button 
                 onClick={handleExport}
-                className="bg-blue-600/90 backdrop-blur-md text-white px-4 py-2 rounded-lg shadow-lg hover:bg-blue-500 transition-all flex items-center gap-2 text-xs font-bold whitespace-nowrap"
+                className="bg-gray-800/90 dark:bg-white/90 backdrop-blur-md text-white dark:text-black px-3 py-1.5 rounded-lg shadow-lg hover:bg-black dark:hover:bg-white transition-all flex items-center gap-2 text-xs font-bold whitespace-nowrap border border-transparent"
              >
                 <Download size={14} />
                 {t.exportImage}
@@ -122,6 +153,11 @@ const ImageGrader: React.FC<ImageGraderProps> = ({ zones, imageSrc, onImageImpor
              <div className="absolute bottom-4 right-4 bg-black/70 text-white text-xs px-3 py-1.5 rounded-full backdrop-blur flex items-center gap-2 z-20">
                  <Loader2 size={12} className="animate-spin" />
                  {t.processing}
+             </div>
+         )}
+         {showOriginal && (
+             <div className="absolute top-16 left-1/2 -translate-x-1/2 bg-blue-600/80 text-white text-[10px] px-2 py-1 rounded-md backdrop-blur z-20 font-bold tracking-widest uppercase pointer-events-none">
+                 {t.original}
              </div>
          )}
       </div>
