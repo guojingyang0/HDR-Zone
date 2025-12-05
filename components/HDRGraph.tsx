@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
 import { CurvePoint, ZoneConfig, ZoneType, MIN_STOP, MAX_STOP } from '../types';
@@ -15,7 +16,7 @@ interface HDRGraphProps {
   };
 }
 
-const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 600, height = 300, theme, labels }) => {
+const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 800, height = 400, theme, labels }) => {
   const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
@@ -24,6 +25,8 @@ const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 
     const svg = d3.select(svgRef.current);
     svg.selectAll("*").remove(); // Clear previous
 
+    // Use viewBox logic for responsiveness
+    // Margins need to be large enough for labels
     const margin = { top: 20, right: 30, bottom: 30, left: 40 };
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
@@ -67,8 +70,15 @@ const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 
       .range([innerHeight, 0]);
 
     // Grid Construction
-    const xAxis = d3.axisBottom(xScale).ticks(10).tickFormat(d => `${d}`);
-    const yAxis = d3.axisLeft(yScale).ticks(5);
+    // Force ticks to integers with step 2 to ensure -8 and 8 are visible
+    const tickValues = d3.range(MIN_STOP, MAX_STOP + 0.1, 2); 
+
+    const xAxis = d3.axisBottom(xScale)
+      .tickValues(tickValues)
+      .tickFormat(d => `${d}`);
+      
+    const yAxis = d3.axisLeft(yScale)
+      .tickValues(tickValues);
 
     const styleAxis = (selection: d3.Selection<SVGGElement, unknown, null, undefined>) => {
       selection.style("font-family", "Inter, sans-serif").style("font-size", "10px");
@@ -203,9 +213,9 @@ const HDRGraph: React.FC<HDRGraphProps> = ({ data, zones, activeZoneId, width = 
   return (
     <svg 
       ref={svgRef} 
-      width={width} 
-      height={height} 
-      className="overflow-visible"
+      viewBox={`0 0 ${width} ${height}`}
+      className="w-full h-auto overflow-visible"
+      preserveAspectRatio="xMidYMid meet"
     />
   );
 };

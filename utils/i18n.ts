@@ -38,12 +38,18 @@ export const translations = {
     original: "IN",
     gradedOutput: "OUT",
     presets: {
-      title: "Learning Scenarios",
-      reset: "Flat / Reset",
-      contrast: "High Contrast (S-Curve)",
-      recoverSky: "Recover Blown Highlights",
-      liftShadows: "Lift Deep Shadows",
-      softRoll: "Soft Rolloff"
+      title: "AI Color Analysis",
+      placeholder: "Try 'High Key', 'Cyberpunk', 'Noir', 'Vibrant'...",
+      reset: "Reset",
+      chips: {
+          reset: "Flat/Reset",
+          cyberpunk: "Cyberpunk",
+          film: "Vintage Film",
+          night: "Night Scene",
+          highkey: "High Key",
+          bnw: "Noir B&W",
+          vibrant: "Vibrant Pop"
+      }
     },
     guide: {
       title: "Zone Guide",
@@ -143,12 +149,18 @@ export const translations = {
     original: "输入",
     gradedOutput: "输出",
     presets: {
-      title: "学习场景预设",
-      reset: "默认 / 平直",
-      contrast: "高对比度 (S型曲线)",
-      recoverSky: "修复天空过曝 (Highlight修复)",
-      liftShadows: "提亮暗部细节 (Shadow提亮)",
-      softRoll: "柔和高光滚落"
+      title: "AI 分析调色",
+      placeholder: "尝试输入 '高调', '赛博朋克', '黑白', '鲜艳'...",
+      reset: "重置",
+      chips: {
+          reset: "默认/平直",
+          cyberpunk: "赛博朋克",
+          film: "复古胶片",
+          night: "质感夜景",
+          highkey: "明亮高调",
+          bnw: "黑白电影",
+          vibrant: "鲜艳通透"
+      }
     },
     guide: {
       title: "分区向导 (Zone Guide)",

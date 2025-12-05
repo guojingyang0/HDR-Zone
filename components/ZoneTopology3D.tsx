@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
 import { ZoneConfig, MIN_STOP, MAX_STOP, ZoneType } from '../types';
@@ -35,7 +36,7 @@ const ZoneTopology3D: React.FC<ZoneTopology3DProps> = ({ zones, activeZoneId, th
 
     // 3D Projection parameters
     // We want a "Ridge Plot" look:
-    // X axis: -6 to +6 EV
+    // X axis: -6 to +6 EV (Now -8 to +8)
     // Y axis: Weight 0 to 1 (Up)
     // Z axis: Zone Index (Depth)
     
@@ -185,9 +186,9 @@ const ZoneTopology3D: React.FC<ZoneTopology3DProps> = ({ zones, activeZoneId, th
     ctx.textAlign = 'center';
     
     // X Axis Labels (bottom most)
-    const steps = 6;
-    for(let j=0; j<=steps; j++) {
-       const ev = MIN_STOP + (j/steps) * (MAX_STOP - MIN_STOP);
+    // Manually iterate step of 2 to ensure we hit -8 and 8 and no decimals
+    const stepSize = 2;
+    for(let ev = MIN_STOP; ev <= MAX_STOP; ev += stepSize) {
        const p = project(ev, 0, -1); // Project slightly in front
        ctx.fillText(`${ev} EV`, p.x, p.y + 20);
     }
