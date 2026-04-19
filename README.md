@@ -1,5 +1,5 @@
 <div align="center">
-  <img width="1200" height="475" alt="HDR Zone Banner" src="./assets/readme-banner.png" />
+  <img width="1200" height="475" alt="HDR Zone Banner" src="./assets/readme-banner-v2.png" />
 </div>
 
 # HDR Zone
@@ -193,7 +193,7 @@ HDR-Zone/
 │   └── i18n.ts                # 多语言文案
 ├── types.ts                   # Zone、曲线与历史记录类型
 └── assets/
-    └── readme-banner.png      # README 展示图
+    └── readme-banner-v2.png   # README 展示图
 ```
 
 ## 一句话总结
