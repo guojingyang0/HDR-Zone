@@ -1,5 +1,5 @@
 <div align="center">
-  <img width="1200" height="975" alt="HDR Zone Banner" src="./assets/readme-banner-v2.png" />
+  <img width="800" height="820" alt="HDR Zone Banner" src="./assets/readme-banner-v2.png" />
 </div>
 
 # HDR Zone
